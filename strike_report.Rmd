@@ -1,0 +1,557 @@
+---
+title: "UCU 2019/2021 pension/pay ballot report"
+author: "Richard D. Morey"
+date: "8 November, 2021"
+output: 
+  html_document:
+    toc: true
+    dev: svg
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE )
+
+library(dplyr)
+library(magrittr)
+library(tidyr)
+library(ggplot2)
+library(DT)
+library(ggiraph)
+
+data_file <- here::here("data", "strike.xlsx")
+
+readxl::excel_sheets(data_file)[1:10] %>%
+  purrr::map_df(function(sheet){
+    info <- strsplit(sheet, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+    df <- readxl::read_xlsx(path = data_file,
+                            sheet = sheet) %>%
+      mutate(Year = !!year,
+             Type = !!type,
+             Action = !!action,
+             University = trimws(University))
+  }) %>%
+  filter( !is.na(University) ) %>%
+  full_join( readxl::read_xlsx(path = data_file, 
+                               sheet = "Locations"),
+             by = "University") -> all_data
+
+all_data %<>%
+  mutate_at( vars( matches("tude")),
+             ~as.numeric(sp::char2dms(from = .))) %>%
+  mutate(
+    p_turnout = Turnout / Mailedout,
+    p_yes = Yes / Turnout,
+    Result = case_when(
+      !Require50 & p_yes > .5 ~ "Yes",
+      !Require50 & p_yes <= .5 ~ "No",
+      p_turnout >= .5 & p_yes > .5 ~ "Yes",
+      p_turnout >= .5 & p_yes <= .5 ~ "No",
+      p_turnout < .5 & p_yes > .5 ~ "Yes, but failed turnout",
+      p_turnout < .5 & p_yes <= .5 ~ "No, but failed turnout",
+      TRUE ~ NA_character_
+    ),
+    Result = factor(Result)
+  )
+
+all_data %>%
+  filter(Type == "pension", Action == "strike") %>%
+  select(-Type, -Action) %>%
+  pivot_wider(id = University, 
+              names_from = Year, 
+              values_from = c(p_yes, p_turnout, Mailedout, Turnout, Yes)) %>% 
+  mutate( University = htmltools::htmlEscape(University, attribute = TRUE)) %>%
+  arrange(desc(Mailedout_2019)) -> year_summaries_pension
+
+all_data %>%
+  filter(Year == 2021, Action == "strike") %>%
+  select(-Year, -Action) %>%
+  pivot_wider(id = University, 
+              names_from = Type, 
+              values_from = c(p_yes, p_turnout, Mailedout)) %>% 
+  mutate( University = htmltools::htmlEscape(University, attribute = TRUE)) %>%
+  arrange(desc(Mailedout_pay)) -> summaries_2021
+
+all_data %>% 
+  filter(Action == "strike", Type == "pension", Year == "2021") %>%
+  select(University) %>% 
+  unlist() %>% 
+  unname() -> pension_unis
+
+all_data %>% 
+  filter(Action == "strike", Type == "pay") %>%
+  select(University) %>% 
+  unlist() %>% 
+  unname() -> pay_unis
+
+
+```
+
+In the report below, I outline some observations about the UCU ballots on pensions and pay in 2019 and 2021. The figures are generally interactive; mouse over the points to see what University is represented. 
+
+I have put the data in a convenient `xlsx` format (unlike the inconvenient UCU data PDFs); this can be found on GitHub, along with the R source code for this report (https://github.com/richarddmorey/UCUballots2021). I have also created an interactive applet for exploring the ballot results at https://rdmorey.shinyapps.io/UCUballots2021/.
+
+At the bottom of this document is a searchable, sortable table for exploring the data across Universities.
+
+By necessity, all correlational analyses eliminate those universities that do not exist in both sets (e.g., there are universities in the pay ballot but not the pension ballot). 
+
+All analyses are of the strike ballots; the `xlsx` file also contains data on the action-short-of-strike ballots, but the results are broadly similar and so are omitted here. Both the data table at the end of this document and the interactive app (https://rdmorey.shinyapps.io/UCUballots2021/) allow exploration of the action-short-of-strike ballot results.
+
+## Comparisons between pension ballots, 2019/2021
+
+### Ballots mailed
+
+Membership appears to be up from 2021 by about 2% on average. The university with the largest increase, at 41%, was Courtauld Institute of Art; the largest decrease was University of Kent, at -22%.
+
+```{r}
+year_summaries_pension %>%
+  ggplot(aes(x = Mailedout_2019, y = Mailedout_2021, size = Mailedout_2019, 
+             tooltip = University, data_id = University)) +
+  geom_abline(slope = c(.5, .75, 1.25, 1.5), intercept = 0, alpha = .2, linetype = "dotted") +
+  annotate("label", x=rep(1500, 4), 
+           y=c(.5, .75, 1.25, 1.5)*1500,
+           label=c("-50%","-25%","+25%","+50%"), 
+           angle=atan(c(.5, .75, 1.25, 1.5))*180/pi, 
+           color = "gray",
+           fill = "white") +
+  geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+  scale_size_area(name = "Mailed out, 2019") +
+  coord_fixed(ratio = 1, expand = FALSE, clip = "off") +
+  geom_smooth(method = loess, se = FALSE, mapping = aes(weight = Mailedout_2019, group = 1)) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3, linetype = "dashed") +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Ballots mailed, 2021") +
+  xlab("Ballots mailed, 2019") +
+  ggtitle("Pension (USS) ballots mailed, 2019 vs 2021") -> p
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  ) 
+```
+
+### Turnout
+
+Average turnout across universities for the pension ballot was down by about 2.3% on average from 2019 to 2021. This is much smaller than the 6% it was down between 2018 and 2019, but it does represent a continued decrease.
+
+```{r}
+year_summaries_pension %>%
+  mutate(p_turnout_2019 = p_turnout_2019 * 100,
+         p_turnout_2021 = p_turnout_2021 * 100) %>%
+  ggplot(aes(x = p_turnout_2019, y = p_turnout_2021, size = Mailedout_2019,
+             tooltip = University, data_id = University)) +
+  geom_abline(slope = c(.8, .9, 1.1, 1.2), intercept = 0, alpha = .2, linetype = "dotted") +
+  annotate("label", x=rep(60, 4), 
+           y=c(.8, .9, 1.1, 1.2)*60,
+           label=c("-20%","-10%","+10%","+20%"), 
+           angle=atan(c(.8, .9, 1.1, 1.2))*180/pi, 
+           color = "gray",
+           fill = "white") +
+  annotate("rect", xmin = c(0,0), xmax = c(50,100), ymin = c(0,0), ymax = c(100,50),
+           alpha = .1, fill = "red") +
+  geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+  scale_size_area(name = "Mailed out, 2019") +
+  coord_fixed(ratio = 1, xlim = c(30,80), ylim = c(30,80), expand = FALSE) +
+  geom_smooth(method = loess, se = FALSE,
+              mapping = aes(weight = Mailedout_2019, group = 1)) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3, linetype = "dashed") +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Turnout, 2021 (%)") +
+  xlab("Turnout, 2019 (%)") +
+  ggtitle("Pension (USS) ballot turnout, 2019 vs 2021") -> p
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+
+```
+
+
+There were some people I talked to in 2018 who worried that the push for members would affect future votes, decreasing turnout by recruiting people who were less enthusiastic than those members who voted for the 2018 strikes. Although membership did increase slightly from 2019 to 2021, and turnout *did* decrease slightly from 2019 to 2021, the pattern does not hold true on the level of universities. There doesn't seem to be a relationship between the two (but there's a lot of variability).
+
+```{r}
+year_summaries_pension %>%
+  mutate(inc_mailedout = 100 * Mailedout_2021 / Mailedout_2019,
+         inc_turnout = 100 * p_turnout_2021 / p_turnout_2019) %>%
+  ggplot(aes(x = inc_mailedout, y = inc_turnout, size = Mailedout_2019, 
+             tooltip = University, data_id = University)) +
+  geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+  scale_size_area(name = "Mailed out, 2019") +
+  geom_vline(xintercept = 100, alpha = .3) +
+  geom_hline(yintercept = 100, alpha = .3) +
+  geom_smooth(method = loess, se = FALSE, mapping = aes(weight = Mailedout_2019, group = 1)) +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Increase in turnout (%)") +
+  xlab("Increase in membership (%)") +
+  ggtitle("Turnout in 2021 pension (USS) ballot, by membership increase") -> p
+
+  girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+```
+
+```{r}
+
+year_summaries_pension %>%
+  mutate(inc_mailedout = 100 * Mailedout_2021 / Mailedout_2019,
+         inc_turnout = 100 * p_turnout_2021 / p_turnout_2019) %>% select( matches("inc_")) %>%
+  cor(method = "kendall", use = "pairwise") %>%
+  `[`(1,2) -> kend_cor
+```
+
+The Kendall's correlation between the increase in membership and the increase in turnout is positive but not terribly strong ($\tau$=`r round(kend_cor,3)`), and the typical caveats about observational data apply. There at least doesn't seem to be any evidence across universities that a boost in membership is associated with a *decrease* in turnout.
+
+### Yes votes
+
+```{r}
+all_data %>% 
+  filter(Action == "strike", Type == "pension") %>%
+  group_by(Year) %>%
+  summarize(p_yes = round(mean(p_yes)*100,1)) -> yes_votes
+
+```
+
+We can also compare the proportion of "yes" votes across the two years. In both 2019 and 2021, votes were *overwhelmingly* in favor of striking. In the 2019 ballot, the average "yes" vote across universities was `r yes_votes$p_yes[2]`%. In 2019, it was lower but still very high at `r yes_votes$p_yes[3]`%. In 2018, 2019, and 2021, *no* university failed to meet a 50% "yes" threshold for industrial action. 
+
+```{r}
+
+year_summaries_pension %>%
+  mutate(p_yes_2019 = p_yes_2019 * 100,
+         p_yes_2021 = p_yes_2021 * 100) %>%
+  ggplot(aes(x = p_yes_2019, y = p_yes_2021, size = Mailedout_2019, 
+             tooltip = University, data_id = University)) +
+  geom_abline(slope = c(.8, .9, 1.1, 1.2), intercept = 0, alpha = .2, linetype = "dotted") +
+  annotate("label", x=rep(70, 4), 
+           y=c(.8, .9, 1.1, 1.2)*70,
+           label=c("-20%","-10%","+10%","+20%"), 
+           angle=atan(c(.8, .9, 1.1, 1.2))*180/pi, 
+           color = "gray",
+           fill = "white") +
+  geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+  coord_fixed(ratio = 1, xlim = c(50,100), ylim = c(50,100),
+              expand = FALSE, clip = "off") +
+  scale_size_area(name = "Mailed out, 2019") +
+  geom_smooth(method = loess, se = FALSE, mapping = aes(weight = Mailedout_2019, group = 1)) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3, linetype = "dashed") +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Yes vote, 2021 (%)") +
+  xlab("Yes vote, 2019 (%)") +
+  ggtitle("Pension (USS) ballot yes votes, 2019 vs 2021") -> p
+
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+
+
+```
+
+Of course, this must be qualified by the turnout numbers, because it is the combination of turnout (&geq;50%) and "yes" vote (&geq;50%) that determines whether industrial action can take place.
+
+The table below shows the number of universities that had/have the opportunity to take industrial action in each year. Although the same number of universities are involved, and there has not been much change in turnout, and members overwhelmingly favor action, the result is a 20% decline in the number of universities that can take part in the industrial action from 2019 to 2021.
+
+```{r}
+all_data %>%
+  filter(Type == "pension", Action == "strike") %>%
+  group_by(Year) %>%
+  summarise(`N Unis.` = n(),
+            `Unis. ≥ threshold` = sum( !Require50 | p_turnout > .5   ),
+             ) %>%
+  mutate( `% ≥ threshold` = `Unis. ≥ threshold` / `N Unis.` * 100) %>% 
+  gt::gt() %>% 
+  gt::fmt_number(
+    columns = vars(`% ≥ threshold`),
+    decimals = 1)
+
+all_data %>%
+  filter(Type == "pension", Action == "strike", Require50) %>%
+  group_by(Year, Result) %>%
+  summarise(Membership = sum(Mailedout)) %>%
+  group_by(Year) %>%
+  mutate(percent = round(100 * Membership/sum(Membership), 1)) -> member_failed
+
+```
+
+Another way of looking at it is by looking at the proportion of members at universities that cannot take part. In 2019, `r member_failed$percent[4]`% of members were not allowed to take part in the industrial action; in 2021, this number is `r member_failed$percent[6]`%. Assuming membership is roughly proportional to the size of the institutions, this is a dramatic change in the number of employees that can take part in strike action.
+
+*Why* the dramatic change? It is all down to how thresholds work (and in this case, are meant to work). If there are a sizable number of universities just above the turnout threshold&mdash;and there will be when turnout is in the mid-50%s&mdash;then a small change in turnout can translate into a large effect on the industrial action.
+
+But have things changed that much? Not really. If we look at the overall ballot numbers (figure below), it seems the major change is in membership. The number of "yes" votes has barely changed, and to the extent that the populations of these institutions has remained the same, this means that the proportion of employees voting to strike has remained constant. 
+
+```{r}
+all_data %>%
+  filter(Action == "strike", Type == "pension", Require50) %>%
+  group_by(Year) %>%
+  summarize(`Ballots mailed` = sum(Mailedout), 
+            Turnout = sum(Turnout),
+            `Yes votes` = sum(Yes)) %>%
+  pivot_longer(cols = -matches("Year"), names_to = "What", values_to = "Number") %>%
+  ggplot(aes(x = Year, group = What, y = Number, color = What)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = 0) +
+  ylim(c(0,52000)) +
+  ggtitle("2018/2019/2021 pension ballot totals") +
+  theme_minimal() +  
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) 
+  
+
+```
+
+Dividing up the vote into universities and then putting a threshold on that vote artificially inflates the differences between years.
+
+## Both 2021 ballots
+
+Because there were two votes in 2021&mdash;a vote on striking over pensions and a vote on striking over pay, casualization, inequality, and workload (["four fights"](https://twitter.com/Dr_SteveStanley/status/1192713303270797312)) &mdash;we can look at the relationship between these two votes (I'll call the "four fights" ballot the "pay" ballot for short below, but it contained multiple issues).
+
+
+```{r}
+
+summaries_2021 %>%
+  mutate(p_turnout_pension = p_turnout_pension * 100,
+         p_turnout_pay = p_turnout_pay * 100) %>%
+  ggplot(aes(x = p_turnout_pension, y = p_turnout_pay, size = Mailedout_pay,
+             tooltip = University, data_id = University)) +
+  annotate("rect", xmin = c(0,0), xmax = c(50,100), ymin = c(0,0), ymax = c(100,50),
+           alpha = .1, fill = "red") +
+  geom_abline(slope = c(.8, .9, 1.1, 1.2), intercept = 0, alpha = .2, linetype = "dotted") +
+  annotate("label", x=rep(60, 4), 
+           y=c(.8, .9, 1.1, 1.2)*60,
+           label=c("-20%","-10%","+10%","+20%"), 
+           angle=atan(c(.8, .9, 1.1, 1.2))*180/pi, 
+           color = "gray",
+           fill = "white") +
+  geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+  coord_fixed(ratio = 1, xlim = c(0,80), ylim = c(0,80),
+              expand = FALSE, clip = "on") +
+  scale_size_area(name = "Mailed out") +
+  geom_smooth(method = loess, se = FALSE, mapping = aes(weight = Mailedout_pay, group = 1)) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3, linetype = "dashed") +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Turnout, pay ballot (%)") +
+  xlab("Turnout, pension ballot (%)") +
+  ggtitle("Pay vs. pension (USS) ballot turnout, 2021") -> p
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+
+```
+
+Turnout was *highly* correlated across the two ballots, and in fact almost identical. This makes sense, because both ballots were mailed in the same envelope. A discrepancy between these two votes would mean you either intentionally didn't vote in one or the other, or were quite careless.
+
+```{r}
+summaries_2021 %>%
+  mutate(p_yes_pension = p_yes_pension * 100,
+         p_yes_pay = p_yes_pay * 100) %>%
+  ggplot(aes(x = p_yes_pension, y = p_yes_pay, size = Mailedout_pay,
+             tooltip = University, data_id = University)) +
+  annotate("rect", xmin = c(0,0), xmax = c(50,100), ymin = c(0,0), ymax = c(100,50),
+           alpha = .1, fill = "red") +
+  geom_abline(slope = c(.8, .9, 1.1, 1.2), intercept = 0, alpha = .2, linetype = "dotted") +
+  annotate("label", x=rep(50, 4), 
+           y=c(.8, .9, 1.1, 1.2)*50,
+           label=c("-20%","-10%","+10%","+20%"), 
+           angle=atan(c(.8, .9, 1.1, 1.2))*180/pi, 
+           color = "gray",
+           fill = "white") +
+  geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+  coord_fixed(ratio = 1, xlim = c(30,100), ylim = c(30,100),
+              expand = FALSE, clip = "on") +
+  scale_size_area(name = "Mailed out") +
+  geom_smooth(method = loess, se = FALSE, mapping = aes(weight = Mailedout_pay, group = 1)) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3, linetype = "dashed") +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Yes vote, pay ballot (%)") +
+  xlab("Yes vote, pension ballot (%)") +
+  ggtitle("Pay vs. pension (USS) ballot yes votes, 2021") -> p
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+
+
+```
+
+
+The votes to strike for pensions and pay/casualization were also highly correlated across institutions. Given that these mostly represent the same individuals voting, this isn't surprising. What is interesting is that the average "yes" vote across universities for a pay/casualization strike is about 8% lower than that for pensions.
+
+
+```{r include=FALSE}
+all_data %>%
+  filter(Action == "strike", Year == "2019") %>% 
+  group_by(Type) %>% 
+  summarise(p_yes = mean(p_yes))
+```
+
+Of course, these are the results only for those universities that were balloted for both. Of these universities, the results for the pension ballot and the pay ballot are very similar. Yet only about 42% of universities will be allowed to strike over pay, compared to 54% for pensions. What happened?
+
+The table below shows the ballot results broken down by ballot type, as well as whether the university was *also* balloted for pension. Those universities balloted for both tended to meet the threshold at the same at 55-60%. But the universities *not* balloted for pensions tended not to meet the threshold (only 28% did).
+
+```{r}
+all_data %>%
+  mutate(pension_uni = University %in% !!pension_unis,
+         pension_uni = factor(pension_uni, 
+                              labels = c("Not balloted for pensions", "Balloted for pensions"))) %>%
+  filter(Year == "2021", Action == "strike") %>%
+  group_by(pension_uni, Type) %>%
+  summarise(`N Unis.` = n(),
+            `Unis. ≥ threshold` = sum( !Require50 | p_turnout > .5   ),
+             ) %>%
+  mutate( `% ≥ threshold` = `Unis. ≥ threshold` / `N Unis.` * 100) %>% 
+  gt::gt() %>% 
+  gt::fmt_number(
+    columns = vars(`% ≥ threshold`),
+    decimals = 1)
+```
+
+This can clearly be seen in the turnout results for both groups in the figure below.
+
+```{r}
+all_data %>%
+  filter(Year == 2021) %>%
+  mutate(pension_uni = University %in% !!pension_unis,
+         p_turnout = 100 * p_turnout,
+         University = htmltools::htmlEscape(University, attribute = TRUE)) %>%
+  filter(Action == "strike", Type == "pay") %>%
+  arrange(desc(p_turnout)) %>%
+  ggplot(aes(x = pension_uni, y = p_turnout, size = Mailedout, color = pension_uni, group = pension_uni,
+             tooltip = University, data_id = University
+             )) +
+  geom_hline(yintercept = 50, alpha = .3, linetype = "dashed") +
+  geom_violin(alpha = .3) +
+  scale_size_area(name = "Mailed out") +
+  scale_color_discrete(name = "Pension ballot?") +
+  geom_jitter_interactive(width = .1, alpha = .3) +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Turnout (%)") +
+  xlab("Also balloted for pensions?") +
+  ggtitle("Pay turnout by whether balloted for pensions") -> p
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+
+
+```
+
+However, both groups are broadly similar in "yes" votes, as the figure below shows. The difference between the two groups appears to be turnout, which may indicate an enthusiasm gap, or something else; I don't know.
+
+```{r}
+all_data %>%
+  filter(Year == 2021) %>%
+  mutate(pension_uni = University %in% !!pension_unis,
+         p_yes = 100 * p_yes,
+         University = htmltools::htmlEscape(University, attribute = TRUE)) %>%
+  filter(Action == "strike", Type == "pay") %>%
+  arrange(desc(p_yes)) %>%
+  ggplot(aes(x = pension_uni, y = p_yes, size = Mailedout, color = pension_uni, group = pension_uni,
+             tooltip = University, data_id = University
+             )) +
+  geom_hline(yintercept = 50, alpha = .3, linetype = "dashed") +
+  geom_violin(alpha = .3) +
+  scale_size_area(name = "Mailed out") +
+  scale_color_discrete(name = "Pension ballot?") +
+  geom_jitter_interactive(width = .1, alpha = .3) +
+  guides(size = guide_legend(override.aes = list(linetype = 0))) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  ylab("Yes (%)") +
+  xlab("Also balloted for pensions?") +
+  ggtitle("Pay ballot vote by whether balloted for pensions") -> p
+
+girafe( ggobj = p, 
+          options = list(
+            opts_toolbar(saveaspng = FALSE)
+          )
+  )
+
+
+```
+
+
+
+
+## Data table
+
+The table below contains all the relevant data from the two years. It is sortable and searchable. You might, however, want to download the full data set in `xlsx` format. This can be found at https://github.com/richarddmorey/UCUballots.
+
+```{r}
+all_data %>%
+  mutate(`Blank/Spoilt` = Blank+Spoilt,
+         `%Turnout` = p_turnout * 100,
+         `%Yes` = p_yes * 100) %>%
+  select(-matches("tude"), -Require50, -Blank, -Spoilt) %>%
+  select(University, Mailedout, Turnout, `%Turnout`, Yes, `%Yes`, No, `Blank/Spoilt`, Result, Type, Year, Action ) %>%
+  rename(Sent = Mailedout) %>%
+  datatable(class = 'cell-border stripe',
+            rownames = FALSE,
+            filter = 'top', options = list(
+            pageLength = 10, autoWidth = TRUE
+            )) %>%
+  formatRound(columns=c('%Yes', '%Turnout'), digits=1) %>% 
+  formatStyle("%Turnout",
+              background = styleColorBar(c(0,100), 'lightcoral', -90),
+              backgroundSize = '98% 88%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center') %>%
+  formatStyle("%Yes",
+              background = styleColorBar(c(0,100), 'lightgreen', -90),
+              backgroundSize = '98% 88%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center') %>%
+  formatStyle("Sent",
+              background = styleColorBar(c(0,2700), 'lightblue', -90),
+              backgroundSize = '98% 88%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center') %>%
+  formatStyle('Result',
+              backgroundColor = styleEqual(c("Yes",
+                                             "Yes, but failed turnout",
+                                             "No",
+                                             "No, but failed turnout"), 
+                                           c('lightgreen', 'lightcoral','lightcoral','lightcoral'))
+  )
+
+```
+

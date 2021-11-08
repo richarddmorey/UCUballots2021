@@ -1,0 +1,616 @@
+---
+title: "2018/2019/2021 UCU ballot results"
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    social: menu
+    theme: journal
+resource_files:
+- data/strike.xlsx
+---
+
+<style>                     
+.navbar {
+  background-color:RosyBrown;
+  border-color:black;
+}
+.chart-stage .shiny-bound-output {
+    width: 80% !important;
+    height: 80% !important;
+}
+</style>   
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dplyr)
+library(magrittr)
+library(tidyr)
+library(ggplot2)
+library(sp)
+library(DT)
+library(ggiraph)
+library(shinyjs)
+library(maps)
+library(mapproj)
+library(here)
+library(readxl)
+library(purrr)
+library(htmltools)
+library(xml2)
+
+data_file <- here::here("data", "strike.xlsx")
+
+readxl::excel_sheets(data_file)[1:10] %>%
+  purrr::map_df(function(sheet){
+    info <- strsplit(sheet, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+    df <- readxl::read_xlsx(path = data_file,
+                            sheet = sheet) %>%
+      mutate(Year = !!year,
+             Type = !!type,
+             Action = !!action,
+             University = trimws(University))
+  }) %>%
+  filter( !is.na(University) ) %>%
+  full_join( readxl::read_xlsx(path = data_file, 
+                               sheet = "Locations"),
+             by = "University") -> all_data
+
+all_data %<>%
+  mutate_at( vars( matches("tude")),
+             ~as.numeric(sp::char2dms(from = .))) %>%
+  mutate(
+    p_turnout = Turnout / Mailedout,
+    p_yes = Yes / Turnout,
+    Result = case_when(
+      !Require50 & p_yes > .5 ~ "Yes",
+      !Require50 & p_yes <= .5 ~ "No",
+      p_turnout >= .5 & p_yes > .5 ~ "Yes",
+      p_turnout >= .5 & p_yes <= .5 ~ "No",
+      p_turnout < .5 & p_yes > .5 ~ "Yes, but failed turnout",
+      p_turnout < .5 & p_yes <= .5 ~ "No, but failed turnout",
+      TRUE ~ NA_character_
+    ),
+    Result = factor(Result)
+  )
+
+ballots = 
+  c("USS (pension), 2018 strike ballot" = "2018_pension_strike",
+    "USS (pension), 2018 ASOS ballot" = "2018_pension_asos",
+    "USS (pension), 2019 strike ballot" = "2019_pension_strike",
+    "USS (pension), 2019 ASOS ballot" = "2019_pension_asos",
+    "Pay, 2019 strike ballot" = "2019_pay_strike",
+    "Pay, 2019 ASOS ballot" = "2019_pay_asos",
+    "USS (pension), 2021 strike ballot" = "2021_pension_strike",
+    "USS (pension), 2021 ASOS ballot" = "2021_pension_asos",
+    "Pay, 2021 strike ballot" = "2021_pay_strike",
+    "Pay, 2021 ASOS ballot" = "2021_pay_asos"    
+    )
+
+```
+
+```{r}
+values <- reactiveValues()
+
+values$University <- NULL
+values$lastChange <- NULL
+
+observeEvent(
+  values$University, {
+    
+    uni_name <- values$University
+    
+    if(length(uni_name)){
+      uni_name_esc <- htmltools::htmlEscape(uni_name, attribute = TRUE)
+      reset_datatable_js <- paste0(
+      "
+      var table = $('table.dataTable').DataTable();
+      //table.rows().deselect();
+      table.search('", uni_name,"');
+      table.draw();
+      //table.rows( {page:'current'} ).select();
+      ")
+      if(values$lastChange != "tbl"){
+        runjs( reset_datatable_js )
+      }
+    }else{
+      uni_name_esc = uni_name = character(0)
+    }
+    
+    if(values$lastChange != "map"){
+      session$sendCustomMessage(type = 'results_map_set', message = uni_name_esc)
+    }
+    
+    if(values$lastChange != "cor"){
+      session$sendCustomMessage(type = 'results_cor_set', message = uni_name_esc)
+    }
+    
+    
+})
+
+
+```
+
+Row {data-height=60}
+----------------------------------------
+
+```{r}
+useShinyjs(rmd = TRUE) 
+selectInput("ballot", label = "", 
+            choices = ballots, 
+            selected = ballots[7])
+```
+
+
+Row {.tabset .tabset-fade }
+-----------------------------------------------------------------------
+
+### Table 
+
+```{r}
+
+observeEvent(
+  input$results_table_rows_selected, {
+     
+    idx <- input$results_table_rows_selected
+    
+    if(length(idx)==0){
+        values$University <- NULL
+        values$lastChange <- "tbl"
+        return()
+    }
+    
+    info <- strsplit(input$ballot, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+
+    all_data %>%
+      filter( Year == !!year,
+              Type == !!type,
+              Action == !!action) -> filtered_data
+    
+    uni_name <- filtered_data$University[idx]
+    
+    if(is.null(values$University)){
+      values$University <- uni_name
+      values$lastChange <- "tbl"
+    }else if(uni_name != values$University){
+      values$lastChange <- "tbl"
+      values$University <- uni_name
+    }
+
+  }
+)
+
+output$results_table <- DT::renderDataTable({
+
+    info <- strsplit(input$ballot, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+
+  all_data %>%
+    filter( Year == !!year,
+            Type == !!type,
+            Action == !!action) %>%
+  mutate(`Blank/Spoilt` = Blank+Spoilt,
+         `%Turnout` = p_turnout * 100,
+         `%Yes` = p_yes * 100) %>%
+  select(-matches("tude"), -Require50, -Blank, -Spoilt, -Year, - Type, -Action) %>%
+  select(University, Mailedout, Turnout, `%Turnout`, Yes, `%Yes`, No, `Blank/Spoilt`, Result) %>%
+  rename(Sent = Mailedout) %>%
+  datatable(class = 'cell-border stripe',
+            rownames = FALSE,
+            selection = 'single',
+            filter = 'top', options = list(
+            pageLength = 5, autoWidth = TRUE,
+            initComplete = JS(
+        "function(settings, json) {",
+        "$(this.api().table().container()).css({'font-size': '80%'});",
+        "}")
+            )) %>%
+  formatRound(columns=c('%Yes', '%Turnout'), digits=1) %>% 
+  formatStyle("%Turnout",
+              background = styleColorBar(c(0,100), 'lightcoral', -90),
+              backgroundSize = '98% 88%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center') %>%
+  formatStyle("%Yes",
+              background = styleColorBar(c(0,100), 'lightgreen', -90),
+              backgroundSize = '98% 88%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center') %>%
+  formatStyle("Sent",
+              background = styleColorBar(c(0,2700), 'lightblue', -90),
+              backgroundSize = '98% 88%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center') %>%
+  formatStyle('Result',
+              backgroundColor = styleEqual(c("Yes",
+                                             "Yes, but failed turnout",
+                                             "No",
+                                             "No, but failed turnout"), 
+                                           c('lightgreen', 'lightcoral','lightcoral','lightcoral'))
+  )
+
+})
+
+dataTableOutput("results_table", height = "100%")
+
+```
+
+
+### Text summary
+
+```{r}
+
+output$test <- renderUI({
+  
+  uni_name <- values$University
+  
+  info <- strsplit(input$ballot, split = "_")[[1]]
+  year <- info[1]
+  type <- info[2]
+  action <- info[3]
+  
+  ballot_name = names(ballots)[ which(ballots == input$ballot) ]
+  
+  all_data %>%
+    filter( Year == !!year,
+            Type == !!type,
+            Action == !!action) %>%
+    mutate(`Blank/Spoilt` = Blank+Spoilt,
+           `%Turnout` = p_turnout * 100,
+           `%Yes` = p_yes * 100) -> filtered_data
+  
+  dontneed50 <- (filtered_data %>% filter(!Require50))$University
+  
+  filtered_data %>% 
+    filter(Require50) -> filtered_req50 
+  
+  overall_text = paste0(
+    "<h4> ", ballot_name,"</h4>",
+    "Overall<sup>*</sup>, ", 
+    prettyNum(sum(filtered_req50$Mailedout), big.mark = ","), 
+    " ballots were sent out to members at ", nrow(filtered_req50), " universities. Of these, ",
+    prettyNum(sum(filtered_req50$Turnout), big.mark = ","), 
+    " were sent back in, ",
+    "for an overall turnout of ",
+    round(100*sum(filtered_req50$Turnout) / sum(filtered_req50$Mailedout), 1),"%. ",
+    sum(filtered_req50$p_turnout>=.5),
+    " universities reached the 50% threshold for the action. ",
+    "Of the ballots received, ",
+    round(100*sum(filtered_req50$Yes) / 
+            sum(filtered_req50$Turnout), 1),
+    "% indicated a 'Yes' vote.<p>",
+    "<br>In total, ", sum(filtered_data$Result == "Yes", na.rm = TRUE), " of ",
+    nrow(filtered_data),
+    " universities voted 'Yes' and met the threshold, if needed, and may take part in the action.<p>",
+    "<br/><sup>*</sup>summaries in this paragraph exclude universities that do not require 50% turnout (",
+    paste(dontneed50,collapse = "; ")
+    ,")."
+    )
+  
+  return(HTML(overall_text))
+  
+  
+})
+
+
+uiOutput("test")
+```
+
+
+### Map
+
+
+
+```{r}
+
+observeEvent(
+  input$results_map_selected, {
+  
+    uni_name = input$results_map_selected
+    if(length(uni_name)==0){
+      return()
+    }
+
+    uni_name = xml2::xml_text(xml2::read_html(paste0("<x>",uni_name,"</x>")))
+
+    if(is.null(values$University)){
+      values$University <- uni_name
+      values$lastChange <- "map"
+    }else if(uni_name != values$University){
+      values$University <- uni_name
+      values$lastChange <- "map"
+    }
+      
+})
+
+output$results_map <- renderGirafe({
+
+  myColors <- c("darkred", "lightcoral",
+                "darkblue","cornflowerblue", "gray")
+  names(myColors) <- levels(all_data$Result)
+  
+  UK <- map_data(map = "world", region = "UK") 
+  
+    info <- strsplit(input$ballot, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+
+  all_data %>%
+    filter( Year == !!year,
+            Type == !!type,
+            Action == !!action) %>%
+    mutate( University = htmltools::htmlEscape(University, attribute = TRUE)) %>%
+    arrange(desc(Mailedout)) %>%
+    ggplot(aes(x = longitude, y = latitude, tooltip = University, size = Mailedout, color = Result, data_id = University)) + 
+    borders(regions = "UK") +
+    coord_map(ylim = c(49, 59.9)) + 
+    #geom_point(alpha = .5) + 
+    geom_point_interactive(alpha = .5) +
+    scale_color_manual(drop = TRUE, values = myColors) +
+    scale_size_area(breaks = c(100, 1000, 2500), name = "Ballots sent") +
+    theme_void() -> p_left
+
+  girafe( ggobj = p_left,
+          options = list(
+            opts_selection(
+              #css = "stroke: yellow; stroke-width: 3px;",
+              css = "stroke: black; stroke-width: 3px; fill: orange;",
+              type = "single",
+              only_shiny = TRUE),
+            #opts_zoom(max = 3),
+            opts_toolbar(saveaspng = TRUE)
+          )
+  )
+  
+  })
+
+
+    output$pipplot2 <- output$pipplot <- renderImage({
+      
+    info <- strsplit(input$ballot, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+
+    uni_name <- values$University      
+      
+    outfile <- tempfile(fileext = '.png')
+    
+    ret_list <- list(src = outfile,
+         contentType = 'image/png',
+         width = 400,
+         height = 400,
+         alt = "Votes")
+ 
+    if(length(uni_name)==0){
+      png(outfile, width = 400*8, height = 400*8, res = 72*8)
+      plot(0,0, ylab="", xlab="", axes=FALSE, ty='n',
+           ylim=c(-1,1), xlim=c(-1,1))
+      text(0,0,"Select a university.")
+      dev.off()
+      return(ret_list)
+    }
+      
+      all_data %>%
+        filter( Year == !!year, 
+                Type == !!type,
+                Action == !!action,
+                University == !!uni_name) -> this_uni
+      
+      if(nrow(this_uni)==0){
+        png(outfile, width = 400*8, height = 400*8, res = 72*8)
+        plot(0,0, ylab="", xlab="", axes=FALSE, ty='n',
+             ylim=c(-1,1), xlim=c(-1,1))
+        text(0,0,"Select a university.")
+        dev.off()
+        return(ret_list)
+      }
+      
+      yes <- this_uni$Yes
+      didnt_vote <- this_uni$Mailedout - this_uni$Turnout
+      
+      if(this_uni$Year == 2019){
+        no_blank_spoilt <- c(
+          no = this_uni$No,
+          blank_spoilt = this_uni$Blank + this_uni$Spoilt
+        )
+      }else{
+        no_blank_spoilt <- this_uni$Turnout - this_uni$Yes
+      }
+      voted <- yes + sum(no_blank_spoilt)
+      
+      left_space = 9
+      base_cex = 0.35
+      pip_width = ceiling( log2( max( didnt_vote, voted ) ) ) + 1
+      pip_margin = .1
+      pip_distance = (1 - 2 * pip_margin) / (pip_width - 1)
+
+      n_pips <- max( ceiling( c( didnt_vote, voted ) / pip_width) )
+      total_width = 2 * pip_margin + (n_pips - 1) * pip_distance 
+      
+      
+      png(outfile, width = 400*8, height = 400*8, res = 72*8)
+      
+      par(mar = c(0, left_space,1.1,0))
+      plot(0,0, typ = 'n', ylim = c(0,2),
+           xlim = c(0, total_width), axes = FALSE, 
+           ylab = "", xlab = "", asp = TRUE)
+      
+      cex = base_cex * ( pip_distance / 0.07272727 ) * ( 0.4060332 / par()$cxy[2] ) 
+      
+      for(k in 1:didnt_vote){
+        my_col = (k - 1) %/% pip_width
+        my_row = ifelse( my_col %% 2,
+                         (k - 1) %% pip_width,
+                         pip_width - 1 - (k - 1) %% pip_width
+                         )
+        x = pip_margin + my_col * pip_distance
+        y = pip_margin + my_row * pip_distance
+        points(x, y, pch = 21, col = "gray", bg = rgb(0,0,0,.05), cex = cex)
+      }
+      
+      for(k in 1:voted){
+        
+        votes <- c( yes = yes, no = sum(no_blank_spoilt) )
+        
+        my_col = (k - 1) %/% pip_width
+        my_row = ifelse( my_col %% 2,
+                         (k - 1) %% pip_width,
+                         pip_width - 1 - (k - 1) %% pip_width 
+                         )
+        x = pip_margin + my_col * pip_distance 
+        y = pip_margin + my_row * pip_distance + 1
+        
+        color = ifelse( k>yes, rgb(1,0,0,.3), "blue" )
+        shape = ifelse( k>yes, 19 , 15 )
+        points(x, y, pch = shape, col = color, cex = cex)
+        }
+      
+      didnt_vote_text = paste(
+        didnt_vote, " (",
+        round( didnt_vote / this_uni$Mailedout * 100, 1 ),
+        "%) did not vote", sep = ""
+        )
+      
+      voted_text = paste(
+        voted, " voted\n",
+        yes, " (",
+        round( yes / voted * 100, 1 ),
+        "%) voted 'yes'", sep = ""
+        )
+      
+      text(x = c(0, 0), y = c(.5, 1.5), 
+           labels = c(didnt_vote_text, voted_text), 
+           adj = c(1, .5), xpd = TRUE)
+
+
+      mtext(uni_name, 3, 0, adj=0)
+      dev.off()
+      
+      return(ret_list)
+      
+    })
+
+
+```
+
+
+```{r}
+
+splitLayout(
+  girafeOutput("results_map", height = "100%"),
+  imageOutput("pipplot", inline = TRUE, height = "400", width = "400")
+)
+
+
+```
+
+
+
+### Turnout vs Vote
+
+```{r}
+
+observeEvent(
+  input$results_cor_selected, {
+  
+    uni_name = input$results_cor_selected
+    if(length(uni_name)==0){
+      return()
+    }
+
+        
+    uni_name = xml2::xml_text(xml2::read_html(paste0("<x>",uni_name,"</x>")))
+    
+    if(is.null(values$University)){
+      values$University <- uni_name
+      values$lastChange <- "cor"
+    }else if(uni_name != values$University){
+      values$lastChange <- "cor"
+      values$University <- uni_name
+
+    }
+    
+})
+
+
+output$results_cor <- renderGirafe({
+
+    info <- strsplit(input$ballot, split = "_")[[1]]
+    year <- info[1]
+    type <- info[2]
+    action <- info[3]
+
+
+  
+all_data %>%
+  group_by(Year, Type, Action) %>%
+  mutate(p_turnout = p_turnout * 100,
+         p_yes = p_yes * 100) %>%
+  summarise(min_turnout = min(p_turnout, na.rm = TRUE), 
+            min_yes = min(p_yes, na.rm = TRUE), 
+            ) -> mins
+  
+  all_data %>%
+    filter( Year == !!year,
+            Type == !!type,
+            Action == !!action) %>%
+    mutate(University = htmltools::htmlEscape(University, attribute = TRUE),
+           p_turnout = p_turnout * 100,
+           p_yes = p_yes * 100) %>%
+    arrange(desc(Mailedout)) %>%
+    ggplot(aes(x = p_turnout, y = p_yes, tooltip = University, size = Mailedout, data_id = University)) +
+    annotate("rect", xmin = c(0,0), xmax = c(50,100), ymin = c(0,0), ymax = c(100,50),
+             alpha = .1, fill = "red") +
+    geom_smooth(method = loess, se = FALSE, mapping = aes(weight = Mailedout, group=1)) +
+    geom_point_interactive(alpha = .3, stroke = 0, color = "blue") +
+    coord_fixed(ratio = 1, xlim = c(0,100), ylim = c(0,100),
+              expand = FALSE, clip = "off") +
+    scale_size_area(name = "Mailed out") +
+    guides(size = guide_legend(override.aes = list(linetype = 0))) +
+    theme_minimal() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank()) +
+    ylab("Yes vote (%)") +
+    xlab("Turnout (%)") +
+    ggtitle(names(ballots)[ballots == input$ballot]) -> p_left
+
+  girafe( ggobj = p_left,
+          width_svg = 4, height_svg = 3.5,
+          options = list(
+            opts_selection(
+              css = "stroke: black; stroke-width: 3px; fill: orange;",
+              type = "single",
+              only_shiny = TRUE),
+            #opts_zoom(max = 3),
+            opts_toolbar(saveaspng = TRUE)
+          )
+  )
+
+
+})
+```
+
+```{r}
+
+splitLayout(
+  girafeOutput("results_cor", height = "100%"),
+  plotOutput("pipplot2", inline = TRUE)
+)
+
+
+```
+
+
+
+

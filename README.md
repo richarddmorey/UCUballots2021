@@ -13,7 +13,7 @@ For the sources for pre-2021 data, see https://github.com/richarddmorey/UCUballo
 
 ## Report 
 
-To view the compiled report, go to https://richarddmorey.github.io/UCUballots2021/.
+To view the compiled report, go to https://richarddmorey.github.io/UCUballots2021/index.html.
 
 ## Interactive app
 

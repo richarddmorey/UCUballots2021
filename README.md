@@ -3,7 +3,7 @@ Data and analyses for the 2018/2019/2021 UCU pension and pay ballots
 
 | File  | Description  |
 |:--|:--|
-| `strike_report.Rmd`   | Source code for report on 2018/2019 UCU ballots on pay and pensions   |   
+| `strike_report.Rmd`   | Source code for report on 2019/2021 UCU ballots on pay and pensions   |   
 | `dashboard.Rmd`  |  Source code for [shiny](https://shiny.rstudio.com/) dashboard for exploring the ballot results (available live at https://rdmorey.shinyapps.io/ucuballots2021/)  |
 | `data/strike.xlsx`  | Full data set in `xlsx` format  |  
 | `data/UCU_Pay_final_confirmed.xlsx` | Source for 2021 "four fights" ballot data, obtained from https://ucu.org.uk/fourfightsballot2021 |
